@@ -202,7 +202,7 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
             location=location,
             results_wanted=results_wanted,
             hours_old=max_days * 24,
-            linkedin_fetch_description=exclude_clearance,
+            linkedin_fetch_description=True,  # required to get num_applicants
         )
         if job_type != "any":
             kwargs["job_type"] = job_type
@@ -299,8 +299,7 @@ with st.sidebar:
 
     st.markdown("---")
     exclude_clearance = st.checkbox("🚫 Exclude clearance jobs", value=True)
-    if exclude_clearance:
-        st.caption("Fetches full descriptions to detect clearance requirements — slightly slower.")
+    st.caption("Full descriptions are always fetched to get applicant counts.")
 
     st.markdown("---")
     scan_btn = st.button("🎯 Scan LinkedIn", use_container_width=True)
