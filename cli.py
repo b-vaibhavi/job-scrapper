@@ -66,7 +66,7 @@ QUICK_TITLES = [
 def scrape(titles, location, max_applicants, max_days, results_per_search=20, remote_only=False,
            sites=None):
     if sites is None:
-        sites = ["linkedin", "indeed", "zip_recruiter"]
+        sites = ["linkedin"]
     all_dfs = []
     seen_urls: set = set()
     total = len(titles)
@@ -167,7 +167,7 @@ def parse_args():
     p.add_argument("--remote-only", action="store_true", help="Remote jobs only")
     p.add_argument(
         "--sites",
-        default="linkedin,indeed,zip_recruiter",
+        default="linkedin",
         help="Comma-separated job boards: linkedin,indeed,zip_recruiter,glassdoor",
     )
     return p.parse_args()

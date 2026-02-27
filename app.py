@@ -322,7 +322,7 @@ with st.sidebar:
     sites = st.multiselect(
         "🌐 Job Boards",
         options=["linkedin", "indeed", "zip_recruiter", "glassdoor"],
-        default=["linkedin", "indeed", "zip_recruiter"],
+        default=["linkedin"],
     )
     max_applicants = st.slider("Max applicants", 1, 100, 50)
     max_days = st.slider("Max job age (days)", 1, 14, 7)
