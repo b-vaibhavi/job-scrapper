@@ -1,8 +1,19 @@
+import re
+import time
+import requests
 import streamlit as st
 import pandas as pd
-import time
 import plotly.express as px
+from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -188,8 +199,38 @@ def is_clearance_job(row):
     return any(kw in text for kw in CLEARANCE_KEYWORDS)
 
 
+def fetch_job_details(job_url: str, session: requests.Session) -> dict:
+    """Fetch a LinkedIn job page and return num_applicants + description."""
+    result = {"num_applicants": float("nan"), "description": ""}
+    try:
+        resp = session.get(job_url, timeout=8)
+        if resp.status_code != 200 or "linkedin.com/signup" in resp.url:
+            return result
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # ── Applicant count ───────────────────────────────────────────────────
+        tag = soup.find(class_=lambda c: c and "num-applicants__caption" in c)
+        if tag:
+            text = tag.get_text(strip=True).lower()
+            if "early applicant" in text:
+                result["num_applicants"] = 0
+            else:
+                m = re.search(r"(\d[\d,]*)", text)
+                if m:
+                    result["num_applicants"] = int(m.group(1).replace(",", ""))
+
+        # ── Description (for clearance filter) ───────────────────────────────
+        div = soup.find("div", class_=lambda c: c and "show-more-less-html__markup" in c)
+        if div:
+            result["description"] = div.get_text(separator=" ", strip=True)
+    except Exception:
+        pass
+    return result
+
+
 def run_scrape(search_term, location, job_type, max_applicants, max_days,
                results_wanted, exclude_clearance):
+    # ── Step 1: fast jobspy call (no per-job description fetch) ──────────────
     status = st.empty()
     status.markdown(
         '<div style="color:#94a3b8;font-size:0.95rem;">🔍 Searching LinkedIn…</div>',
@@ -202,7 +243,7 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
             location=location,
             results_wanted=results_wanted,
             hours_old=max_days * 24,
-            linkedin_fetch_description=True,  # required to get num_applicants
+            linkedin_fetch_description=False,
         )
         if job_type != "any":
             kwargs["job_type"] = job_type
@@ -217,13 +258,39 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Filter by applicants (column may be absent if LinkedIn didn't return it)
-    if "num_applicants" not in df.columns:
-        df["num_applicants"] = float("nan")
+    # ── Step 2: fetch each job page ourselves to get num_applicants + desc ───
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+
+    total = len(df)
+    progress = st.progress(0)
+    detail_status = st.empty()
+
+    applicant_counts = []
+    descriptions = []
+
+    for i, (_, row) in enumerate(df.iterrows()):
+        detail_status.markdown(
+            f'<div style="color:#94a3b8;font-size:0.9rem;">'
+            f'📄 Fetching details <b>{i+1}/{total}</b>…</div>',
+            unsafe_allow_html=True,
+        )
+        progress.progress((i + 1) / total)
+        details = fetch_job_details(row["job_url"], session)
+        applicant_counts.append(details["num_applicants"])
+        descriptions.append(details["description"])
+        time.sleep(0.5)
+
+    progress.empty()
+    detail_status.empty()
+
+    df["num_applicants"] = applicant_counts
+    df["description"] = descriptions
+
+    # ── Step 3: filter ────────────────────────────────────────────────────────
     mask = df["num_applicants"].isna() | (df["num_applicants"] < max_applicants)
     df = df[mask]
 
-    # Filter out clearance jobs
     if exclude_clearance:
         df = df[~df.apply(is_clearance_job, axis=1)]
 
