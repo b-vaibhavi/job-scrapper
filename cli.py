@@ -88,6 +88,8 @@ def scrape(titles, location, max_applicants, max_days, results_per_search=20, re
             if df is not None and not df.empty:
                 df = df[~df["job_url"].isin(seen_urls)]
                 seen_urls.update(df["job_url"].tolist())
+                if "num_applicants" not in df.columns:
+                    df["num_applicants"] = float("nan")
                 mask = df["num_applicants"].isna() | (df["num_applicants"] < max_applicants)
                 df = df[mask]
                 if not df.empty:

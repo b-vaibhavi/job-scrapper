@@ -217,7 +217,9 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Filter by applicants
+    # Filter by applicants (column may be absent if LinkedIn didn't return it)
+    if "num_applicants" not in df.columns:
+        df["num_applicants"] = float("nan")
     mask = df["num_applicants"].isna() | (df["num_applicants"] < max_applicants)
     df = df[mask]
 
