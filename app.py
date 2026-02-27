@@ -177,6 +177,10 @@ if "results" not in st.session_state:
     st.session_state.results = None
 if "scan_done" not in st.session_state:
     st.session_state.scan_done = False
+if "fetched_count" not in st.session_state:
+    st.session_state.fetched_count = 0
+if "detail_count" not in st.session_state:
+    st.session_state.detail_count = 0
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -231,6 +235,10 @@ def fetch_job_details(job_url: str, session: requests.Session) -> dict:
 def run_scrape(search_term, location, job_type, max_applicants, max_days,
                results_wanted, exclude_clearance):
     # ── Step 1: fast jobspy call (no per-job description fetch) ──────────────
+    # NOTE: We intentionally do NOT pass hours_old to LinkedIn.
+    # jobspy passes it as LinkedIn's f_TPR filter (server-side) which drastically
+    # cuts results. We filter by date_posted ourselves after fetching for better
+    # coverage.
     status = st.empty()
     status.markdown(
         '<div style="color:#94a3b8;font-size:0.95rem;">🔍 Searching LinkedIn…</div>',
@@ -242,7 +250,6 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
             search_term=search_term,
             location=location,
             results_wanted=results_wanted,
-            hours_old=max_days * 24,
             linkedin_fetch_description=False,
         )
         if job_type != "any":
@@ -251,12 +258,22 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
     except Exception as exc:
         status.empty()
         st.error(f"Scrape error: {exc}")
-        return pd.DataFrame()
+        return pd.DataFrame(), 0, 0
 
     status.empty()
 
     if df is None or df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), 0, 0
+
+    # ── Step 1b: local date filter (instead of LinkedIn's server-side one) ───
+    if "date_posted" in df.columns:
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=max_days)
+        df = df[df["date_posted"].isna() | (pd.to_datetime(df["date_posted"]) >= cutoff)]
+
+    if df.empty:
+        return pd.DataFrame(), 0, 0
+
+    fetched_count = len(df)
 
     # ── Step 2: fetch each job page ourselves to get num_applicants + desc ───
     session = requests.Session()
@@ -294,7 +311,7 @@ def run_scrape(search_term, location, job_type, max_applicants, max_days,
     if exclude_clearance:
         df = df[~df.apply(is_clearance_job, axis=1)]
 
-    return df.reset_index(drop=True)
+    return df.reset_index(drop=True), fetched_count, total
 
 
 def sort_df(df, sort_by):
@@ -423,15 +440,31 @@ if scan_btn:
         st.session_state.results = None
 
         st.markdown('<div class="section-header">🔍 Scanning LinkedIn…</div>', unsafe_allow_html=True)
-        df = run_scrape(search_term.strip(), location, job_type, max_applicants,
-                        max_days, results_wanted, exclude_clearance)
+        df, fetched_count, detail_count = run_scrape(
+            search_term.strip(), location, job_type, max_applicants,
+            max_days, results_wanted, exclude_clearance
+        )
         st.session_state.results = df
+        st.session_state.fetched_count = fetched_count
+        st.session_state.detail_count = detail_count
         st.session_state.scan_done = True
         st.rerun()
 
 # ── Results ───────────────────────────────────────────────────────────────────
 if st.session_state.scan_done and st.session_state.results is not None:
     df = st.session_state.results.copy()
+
+    fetched = st.session_state.fetched_count
+    detail = st.session_state.detail_count
+    if fetched:
+        st.markdown(
+            f'<div style="color:#64748b;font-size:0.82rem;margin-bottom:0.5rem;">'
+            f'🔗 LinkedIn returned <b style="color:#818cf8">{fetched}</b> jobs within date range '
+            f'→ fetched details for <b style="color:#818cf8">{detail}</b> '
+            f'→ <b style="color:#818cf8">{len(df)}</b> passed applicant filter'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     if df.empty:
         st.warning("No jobs matched your criteria. Try relaxing the filters.")
