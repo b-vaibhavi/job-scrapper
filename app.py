@@ -154,38 +154,11 @@ div[data-testid="stButton"] > button:hover { opacity: 0.9; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Job title categories ──────────────────────────────────────────────────────
-JOB_CATEGORIES = {
-    "Core SWE": [
-        "Software Engineer", "Software Developer", "Backend Engineer",
-        "Frontend Engineer", "Full Stack Engineer", "Full Stack Developer",
-        "Web Developer", "Application Developer",
-    ],
-    "AI/ML": [
-        "AI Engineer", "AI Software Engineer", "Machine Learning Engineer",
-        "ML Engineer", "LLM Engineer", "NLP Engineer", "Deep Learning Engineer",
-        "AI Research Engineer", "Applied Scientist", "MLOps Engineer",
-    ],
-    "Data": ["Data Engineer", "Data Scientist", "Analytics Engineer"],
-    "Cloud/DevOps": [
-        "Cloud Engineer", "DevOps Engineer", "Platform Engineer",
-        "Site Reliability Engineer", "SRE", "Infrastructure Engineer",
-    ],
-    "Quant/Finance": [
-        "Quant Developer", "Quantitative Developer", "Quant Analyst",
-        "Quantitative Analyst", "Quantitative Engineer", "Financial Software Engineer",
-    ],
-    "Specialized": [
-        "Python Developer", "Java Developer", "React Developer",
-        "Solutions Engineer", "API Engineer", "Automation Engineer",
-        "Systems Engineer", "Embedded Software Engineer",
-    ],
-}
-
-QUICK_TITLES = [
-    "Software Engineer", "Backend Engineer", "Frontend Engineer",
-    "Full Stack Engineer", "AI Engineer", "Machine Learning Engineer",
-    "Data Engineer", "DevOps Engineer", "Cloud Engineer", "Platform Engineer",
+# ── Clearance filter keywords ─────────────────────────────────────────────────
+CLEARANCE_KEYWORDS = [
+    "clearance", "top secret", "ts/sci", "secret/sci",
+    "dod clearance", "public trust", "must be cleared",
+    "requires clearance", "active clearance", "security clearance",
 ]
 
 # ── Session state init ────────────────────────────────────────────────────────
@@ -207,60 +180,52 @@ def applicant_badge(num):
     return f'<span class="badge badge-blue">🔵 {n} applicants</span>'
 
 
-def run_scrape(titles, location, max_applicants, max_days, results_per_search, sites):
-    all_dfs = []
-    seen_urls = set()
-    total = len(titles)
-    progress = st.progress(0)
+def is_clearance_job(row):
+    text = " ".join([
+        str(row.get("title", "")),
+        str(row.get("description", "")),
+    ]).lower()
+    return any(kw in text for kw in CLEARANCE_KEYWORDS)
+
+
+def run_scrape(search_term, location, job_type, max_applicants, max_days,
+               results_wanted, exclude_clearance):
     status = st.empty()
-    errors = []
-
-    for i, title in enumerate(titles):
-        pct = i / total
-        progress.progress(pct)
-        status.markdown(
-            f'<div style="color:#94a3b8;font-size:0.95rem;">'
-            f'🔍 <b>{i+1}/{total}</b> — Searching: <span style="color:#818cf8">{title}</span>'
-            f"</div>",
-            unsafe_allow_html=True,
+    status.markdown(
+        '<div style="color:#94a3b8;font-size:0.95rem;">🔍 Searching LinkedIn…</div>',
+        unsafe_allow_html=True,
+    )
+    try:
+        kwargs = dict(
+            site_name=["linkedin"],
+            search_term=search_term,
+            location=location,
+            results_wanted=results_wanted,
+            hours_old=max_days * 24,
+            linkedin_fetch_description=exclude_clearance,
         )
-        try:
-            df = scrape_jobs(
-                site_name=sites,
-                search_term=title,
-                location=location,
-                results_wanted=results_per_search,
-                hours_old=max_days * 24,
-                country_indeed="USA",
-            )
-            if df is not None and not df.empty:
-                # Deduplicate
-                df = df[~df["job_url"].isin(seen_urls)]
-                seen_urls.update(df["job_url"].tolist())
-                # Filter by applicants
-                mask = df["num_applicants"].isna() | (df["num_applicants"] < max_applicants)
-                df = df[mask]
-                if not df.empty:
-                    all_dfs.append(df)
-        except Exception as exc:
-            errors.append(f"`{title}`: {exc}")
-        if i < total - 1:
-            time.sleep(1)
+        if job_type != "any":
+            kwargs["job_type"] = job_type
+        df = scrape_jobs(**kwargs)
+    except Exception as exc:
+        status.empty()
+        st.error(f"Scrape error: {exc}")
+        return pd.DataFrame()
 
-    if errors:
-        with st.expander(f"⚠️ {len(errors)} search error(s) — click to expand"):
-            for e in errors:
-                st.markdown(f"- {e}")
-
-    progress.progress(1.0)
     status.empty()
 
-    if all_dfs:
-        combined = pd.concat(all_dfs, ignore_index=True)
-        # Final dedup pass
-        combined = combined.drop_duplicates(subset=["job_url"])
-        return combined
-    return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Filter by applicants
+    mask = df["num_applicants"].isna() | (df["num_applicants"] < max_applicants)
+    df = df[mask]
+
+    # Filter out clearance jobs
+    if exclude_clearance:
+        df = df[~df.apply(is_clearance_job, axis=1)]
+
+    return df.reset_index(drop=True)
 
 
 def sort_df(df, sort_by):
@@ -318,29 +283,25 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    search_term = st.text_input("🔍 Search Term", value="software engineer")
     location = st.text_input("📍 Location", value="United States")
-    sites = st.multiselect(
-        "🌐 Job Boards",
-        options=["linkedin", "indeed", "zip_recruiter", "glassdoor"],
-        default=["linkedin"],
+    job_type = st.selectbox(
+        "💼 Job Type",
+        options=["fulltime", "parttime", "contract", "any"],
+        index=0,
+        format_func=lambda x: x.title() if x != "any" else "Any",
     )
-    max_applicants = st.slider("Max applicants", 1, 100, 50)
+    max_applicants = st.slider("Max applicants", 1, 200, 60)
     max_days = st.slider("Max job age (days)", 1, 14, 7)
-    results_per_search = st.slider("Results per title", 10, 50, 20)
+    results_wanted = st.slider("Results to fetch", 25, 200, 100)
 
     st.markdown("---")
-    st.markdown('<div class="sidebar-label">Job Title Categories</div>', unsafe_allow_html=True)
-
-    selected_titles = []
-    default_on = {"Core SWE", "AI/ML"}
-    for cat, titles in JOB_CATEGORIES.items():
-        checked = st.checkbox(cat, value=(cat in default_on))
-        if checked:
-            selected_titles.extend(titles)
+    exclude_clearance = st.checkbox("🚫 Exclude clearance jobs", value=True)
+    if exclude_clearance:
+        st.caption("Fetches full descriptions to detect clearance requirements — slightly slower.")
 
     st.markdown("---")
-    scan_btn = st.button("🎯 Start Scanning", use_container_width=True)
-    quick_btn = st.button("⚡ Quick Scan (Top 10)", use_container_width=True)
+    scan_btn = st.button("🎯 Scan LinkedIn", use_container_width=True)
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 if not st.session_state.scan_done:
@@ -355,15 +316,15 @@ if not st.session_state.scan_done:
     with col1:
         st.markdown(
             '<div class="step-card"><b style="color:#6366f1">1. Configure</b><br>'
-            '<span style="color:#94a3b8;font-size:0.9rem">Set your location, applicant limit, '
-            "and choose job categories from the sidebar.</span></div>",
+            '<span style="color:#94a3b8;font-size:0.9rem">Set your search term, location, '
+            "job type, and applicant cap in the sidebar.</span></div>",
             unsafe_allow_html=True,
         )
     with col2:
         st.markdown(
             '<div class="step-card"><b style="color:#6366f1">2. Scan</b><br>'
-            '<span style="color:#94a3b8;font-size:0.9rem">Hit "Start Scanning" — the app searches '
-            "LinkedIn for every selected title and collects results.</span></div>",
+            '<span style="color:#94a3b8;font-size:0.9rem">Hit "Scan LinkedIn" — fetches full-time '
+            "software engineer roles and filters out clearance jobs.</span></div>",
             unsafe_allow_html=True,
         )
     with col3:
@@ -386,18 +347,16 @@ if not st.session_state.scan_done:
     """, unsafe_allow_html=True)
 
 # ── Trigger scan ──────────────────────────────────────────────────────────────
-if scan_btn or quick_btn:
-    titles_to_scan = QUICK_TITLES if quick_btn else list(dict.fromkeys(selected_titles))
-    if not titles_to_scan:
-        st.warning("Please select at least one job category.")
+if scan_btn:
+    if not search_term.strip():
+        st.warning("Please enter a search term.")
     else:
         st.session_state.scan_done = False
         st.session_state.results = None
 
-        boards = sites if sites else ["indeed", "zip_recruiter"]
-        board_label = " + ".join(s.title() for s in boards)
-        st.markdown(f'<div class="section-header">🔍 Scanning {board_label}…</div>', unsafe_allow_html=True)
-        df = run_scrape(titles_to_scan, location, max_applicants, max_days, results_per_search, boards)
+        st.markdown('<div class="section-header">🔍 Scanning LinkedIn…</div>', unsafe_allow_html=True)
+        df = run_scrape(search_term.strip(), location, job_type, max_applicants,
+                        max_days, results_wanted, exclude_clearance)
         st.session_state.results = df
         st.session_state.scan_done = True
         st.rerun()
