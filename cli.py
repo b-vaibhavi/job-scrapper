@@ -63,7 +63,10 @@ QUICK_TITLES = [
 
 
 # ── Scraping ──────────────────────────────────────────────────────────────────
-def scrape(titles, location, max_applicants, max_days, results_per_search=20, remote_only=False):
+def scrape(titles, location, max_applicants, max_days, results_per_search=20, remote_only=False,
+           sites=None):
+    if sites is None:
+        sites = ["linkedin", "indeed", "zip_recruiter"]
     all_dfs = []
     seen_urls: set = set()
     total = len(titles)
@@ -72,11 +75,12 @@ def scrape(titles, location, max_applicants, max_days, results_per_search=20, re
         print(f"[{i}/{total}] Searching: {title}")
         try:
             kwargs = dict(
-                site_name=["linkedin"],
+                site_name=sites,
                 search_term=title,
                 location=location,
                 results_wanted=results_per_search,
                 hours_old=max_days * 24,
+                country_indeed="USA",
             )
             if remote_only:
                 kwargs["is_remote"] = True
@@ -97,7 +101,7 @@ def scrape(titles, location, max_applicants, max_days, results_per_search=20, re
             print(f"  ✗ Error: {exc}")
 
         if i < total:
-            time.sleep(2)
+            time.sleep(1)
 
     if not all_dfs:
         return pd.DataFrame()
@@ -161,6 +165,11 @@ def parse_args():
     p.add_argument("--email", default=os.environ.get("ALERT_EMAIL", ""), help="Alert email recipient")
     p.add_argument("--quick", action="store_true", help="Quick scan (top 10 titles only)")
     p.add_argument("--remote-only", action="store_true", help="Remote jobs only")
+    p.add_argument(
+        "--sites",
+        default="linkedin,indeed,zip_recruiter",
+        help="Comma-separated job boards: linkedin,indeed,zip_recruiter,glassdoor",
+    )
     return p.parse_args()
 
 
@@ -168,8 +177,11 @@ def main():
     args = parse_args()
     titles = QUICK_TITLES if args.quick else ALL_TITLES
 
+    sites = [s.strip() for s in args.sites.split(",") if s.strip()]
+
     print(f"\n🎯 Job Sniper — CLI Mode")
     print(f"   Location      : {args.location}")
+    print(f"   Job boards    : {', '.join(sites)}")
     print(f"   Max applicants: {args.max_applicants}")
     print(f"   Max age       : {args.max_days} days")
     print(f"   Titles        : {len(titles)}")
@@ -182,6 +194,7 @@ def main():
         max_days=args.max_days,
         results_per_search=args.results_per_search,
         remote_only=args.remote_only,
+        sites=sites,
     )
 
     if df.empty:

@@ -207,12 +207,13 @@ def applicant_badge(num):
     return f'<span class="badge badge-blue">🔵 {n} applicants</span>'
 
 
-def run_scrape(titles, location, max_applicants, max_days, results_per_search):
+def run_scrape(titles, location, max_applicants, max_days, results_per_search, sites):
     all_dfs = []
     seen_urls = set()
     total = len(titles)
     progress = st.progress(0)
     status = st.empty()
+    errors = []
 
     for i, title in enumerate(titles):
         pct = i / total
@@ -225,11 +226,12 @@ def run_scrape(titles, location, max_applicants, max_days, results_per_search):
         )
         try:
             df = scrape_jobs(
-                site_name=["linkedin"],
+                site_name=sites,
                 search_term=title,
                 location=location,
                 results_wanted=results_per_search,
                 hours_old=max_days * 24,
+                country_indeed="USA",
             )
             if df is not None and not df.empty:
                 # Deduplicate
@@ -240,10 +242,15 @@ def run_scrape(titles, location, max_applicants, max_days, results_per_search):
                 df = df[mask]
                 if not df.empty:
                     all_dfs.append(df)
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(f"`{title}`: {exc}")
         if i < total - 1:
-            time.sleep(2)
+            time.sleep(1)
+
+    if errors:
+        with st.expander(f"⚠️ {len(errors)} search error(s) — click to expand"):
+            for e in errors:
+                st.markdown(f"- {e}")
 
     progress.progress(1.0)
     status.empty()
@@ -312,6 +319,11 @@ with st.sidebar:
     )
 
     location = st.text_input("📍 Location", value="United States")
+    sites = st.multiselect(
+        "🌐 Job Boards",
+        options=["linkedin", "indeed", "zip_recruiter", "glassdoor"],
+        default=["linkedin", "indeed", "zip_recruiter"],
+    )
     max_applicants = st.slider("Max applicants", 1, 100, 50)
     max_days = st.slider("Max job age (days)", 1, 14, 7)
     results_per_search = st.slider("Results per title", 10, 50, 20)
@@ -320,8 +332,9 @@ with st.sidebar:
     st.markdown('<div class="sidebar-label">Job Title Categories</div>', unsafe_allow_html=True)
 
     selected_titles = []
+    default_on = {"Core SWE", "AI/ML"}
     for cat, titles in JOB_CATEGORIES.items():
-        checked = st.checkbox(cat, value=True)
+        checked = st.checkbox(cat, value=(cat in default_on))
         if checked:
             selected_titles.extend(titles)
 
@@ -381,8 +394,10 @@ if scan_btn or quick_btn:
         st.session_state.scan_done = False
         st.session_state.results = None
 
-        st.markdown('<div class="section-header">🔍 Scanning LinkedIn…</div>', unsafe_allow_html=True)
-        df = run_scrape(titles_to_scan, location, max_applicants, max_days, results_per_search)
+        boards = sites if sites else ["indeed", "zip_recruiter"]
+        board_label = " + ".join(s.title() for s in boards)
+        st.markdown(f'<div class="section-header">🔍 Scanning {board_label}…</div>', unsafe_allow_html=True)
+        df = run_scrape(titles_to_scan, location, max_applicants, max_days, results_per_search, boards)
         st.session_state.results = df
         st.session_state.scan_done = True
         st.rerun()
